@@ -10,8 +10,12 @@ using System.IO;
 
 namespace image_db 
 {
-    public class UserPhotoDb 
+    public class UserPhotoDb : IUserPhotoDb
     {
+        private const int SubdirectoryNameLength = 2;
+        private const int StoredPhotoWidth = 96;
+        private const int StoredPhotoHeight = 96;
+
         private readonly HashSet<string> _existingSubdirs;
         private readonly string _rootDir;
 
@@ -22,6 +26,40 @@ namespace image_db
             System.IO.Directory.CreateDirectory(rootDir);
 
             _existingSubdirs = InitExistingSubdirs();
+        }
+
+        public void Put(string accountSid, byte[] imageBytes) 
+        {
+            using (Image<Rgba32> photo = Image.Load(imageBytes))
+            {
+                if (photo.Width != StoredPhotoWidth || photo.Height != StoredPhotoHeight)
+                {
+                    photo.Mutate(x => x.Resize(new ResizeOptions()
+                    {
+                        Size = new Size(96, 96),
+                        Mode = ResizeMode.Stretch
+                    }));
+                }
+                string filepath = GetFilePathForSid(accountSid);
+                EnsureSubdirExistsForFile(filepath);
+                using (var outfile = new System.IO.FileStream(filepath, FileMode.Create, FileAccess.Write, FileShare.None))
+                {
+                    photo.SaveAsJpeg(outfile);
+                }
+            }
+        }
+
+        public byte[] Get(string accountSid)
+        {
+            string filepath = GetFilePathForSid(accountSid);
+            try
+            {
+                return System.IO.File.ReadAllBytes(filepath);
+            }
+            catch (System.IO.FileNotFoundException)
+            {
+                return null;
+            }
         }
 
         private HashSet<string> InitExistingSubdirs()
@@ -37,40 +75,32 @@ namespace image_db
             return res;
         }
 
-        public void Store(string accountSid, string imageBase64) 
+        private string GetFilePathForSid(string accountSid)
         {
-            byte[] imageBytes = System.Convert.FromBase64String(imageBase64);
+            string normalizedSid = NormalizeAccountSid(accountSid);
 
-            using (Image<Rgba32> photo = Image.Load(imageBytes))
-            {
-                photo.Mutate(x => x.Resize(new ResizeOptions()
-                {
-                    Size = new Size(96, 96),
-                    Mode = ResizeMode.Stretch
-                }));
-                string dirPath = PrepareDirectoryForSid(accountSid);
-                string outfilePath = System.IO.Path.Combine(dirPath, accountSid.ToLowerInvariant() + ".jpg");
-                using (var outfile = new System.IO.FileStream(accountSid, FileMode.Create, FileAccess.Write, FileShare.None))
-                {
-                    photo.SaveAsJpeg(outfile);
-                }
-            }
+            string subdirname = normalizedSid.Substring(normalizedSid.Length - SubdirectoryNameLength);
+            string subdirpath = System.IO.Path.Combine(_rootDir, subdirname);
+            
+            string filepath = System.IO.Path.Combine(subdirpath, normalizedSid + ".jpg");
+            return filepath;
         }
 
-        private string PrepareDirectoryForSid(string accountSid)
+        private void EnsureSubdirExistsForFile(string filepath)
         {
-            var preparedSid = accountSid.ToLowerInvariant();
-            var subdirname = preparedSid.Substring(preparedSid.Length - 2);
-
+            string subdirname = System.IO.Path.GetDirectoryName(filepath);
             var subdirpath = System.IO.Path.Combine(_rootDir, subdirname);
-
+            
             if (!_existingSubdirs.Contains(subdirname))
             {
                 System.IO.Directory.CreateDirectory(subdirpath);
                 _existingSubdirs.Add(subdirname);
             }
+        }
 
-            return subdirpath;
+        private string NormalizeAccountSid(string accountSid)
+        {
+            return accountSid.ToLowerInvariant();
         }
     }
 }
